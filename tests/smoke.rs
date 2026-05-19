@@ -1594,6 +1594,130 @@ fn land_plan_and_apply_merges_recorded_publications_with_fake_gh() {
 }
 
 #[test]
+fn project_landing_template_orders_merges_and_runs_deploy_from_base_checkout() {
+    let root = unique_temp_dir();
+    let (_backend_remote, backend, backend_collaborator) = init_remote_repo(&root, "backend");
+    let (_frontend_remote, frontend, _frontend_collaborator) = init_remote_repo(&root, "frontend");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    knit(&workspace, ["project", "init", "arbient"]);
+    knit(
+        &workspace,
+        ["project", "add", "backend", backend.to_str().unwrap()],
+    );
+    knit(
+        &workspace,
+        ["project", "add", "frontend", frontend.to_str().unwrap()],
+    );
+
+    fs::write(backend_collaborator.join("base.txt"), "ready for deploy\n").unwrap();
+    git(&backend_collaborator, ["add", "base.txt"]);
+    git(
+        &backend_collaborator,
+        ["commit", "-m", "Deploy base update"],
+    );
+    git(&backend_collaborator, ["push", "origin", "main"]);
+
+    let deploy_pwd = root.join("deploy-pwd.txt");
+    let deploy_branch = root.join("deploy-branch.txt");
+    let deploy_script = format!(
+        "pwd > '{}' && git rev-parse --abbrev-ref HEAD > '{}' && test -f base.txt",
+        deploy_pwd.display(),
+        deploy_branch.display()
+    );
+    let project_path = workspace.join(".knit/projects/arbient.project.json");
+    let mut project: Value =
+        serde_json::from_str(&fs::read_to_string(&project_path).unwrap()).unwrap();
+    project["landing"] = json!({
+        "provider": "github",
+        "merge": {
+            "repoOrder": ["frontend", "backend"],
+            "method": "merge",
+            "waitForChecks": true,
+            "requiredChecksOnly": true,
+            "deleteBranch": false
+        },
+        "deployments": [
+            {
+                "id": "deploy-backend",
+                "repoId": "backend",
+                "checkout": { "branch": "main", "remote": "origin", "update": "pull" },
+                "command": ["sh", "-c", deploy_script]
+            },
+            {
+                "id": "deploy-frontend",
+                "repoId": "frontend",
+                "mode": "push"
+            }
+        ]
+    });
+    fs::write(
+        &project_path,
+        format!("{}\n", serde_json::to_string_pretty(&project).unwrap()),
+    )
+    .unwrap();
+
+    knit(&workspace, ["bundle", "start", "venue capacity"]);
+    append_line(
+        &workspace.join(".knit/worktrees/venue-capacity/backend/app.txt"),
+        "backend project landing",
+    );
+    append_line(
+        &workspace.join(".knit/worktrees/venue-capacity/frontend/app.txt"),
+        "frontend project landing",
+    );
+    knit(
+        &workspace,
+        ["commit", "--stage", "-m", "Project landing change"],
+    );
+
+    let fake_gh_dir = root.join("fake-gh");
+    let fake_bin = root.join("fake-bin");
+    write_fake_gh(&fake_bin, &fake_gh_dir);
+    knit_with_fake_gh(
+        &workspace,
+        ["publish", "github", "create", "--no-sync"],
+        &fake_bin,
+        &fake_gh_dir,
+    );
+
+    knit_with_fake_gh(&workspace, ["land", "plan"], &fake_bin, &fake_gh_dir);
+    let plan_path = workspace.join(".knit/land-plans/venue-capacity.land.json");
+    let plan: Value = serde_json::from_str(&fs::read_to_string(&plan_path).unwrap()).unwrap();
+    assert_eq!(plan["sourceProjectId"].as_str(), Some("arbient"));
+    let steps = plan["steps"].as_array().unwrap();
+    assert_eq!(steps[0]["id"].as_str(), Some("merge-frontend"));
+    assert_eq!(steps[1]["id"].as_str(), Some("merge-backend"));
+    assert_eq!(steps[2]["type"].as_str(), Some("deploy"));
+    assert_eq!(steps[2]["id"].as_str(), Some("deploy-backend"));
+    assert_eq!(
+        steps[2]["needs"].as_array().unwrap()[0].as_str(),
+        Some("merge-backend")
+    );
+    assert_eq!(steps[3]["id"].as_str(), Some("deploy-frontend"));
+    assert_eq!(
+        steps[3]["needs"].as_array().unwrap()[0].as_str(),
+        Some("deploy-backend")
+    );
+
+    let apply = knit_with_fake_gh(&workspace, ["land", "apply"], &fake_bin, &fake_gh_dir);
+    assert!(apply.contains("deploy-backend"));
+    assert!(apply.contains("deploy-frontend"));
+    let order = fs::read_to_string(fake_gh_dir.join("merge-order.txt")).unwrap();
+    assert_eq!(
+        order.lines().collect::<Vec<_>>(),
+        vec!["frontend", "backend"]
+    );
+    assert!(fs::read_to_string(&deploy_pwd)
+        .unwrap()
+        .contains(".knit/land-worktrees/venue-capacity/backend/main"));
+    assert_eq!(fs::read_to_string(&deploy_branch).unwrap().trim(), "HEAD");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn land_update_merges_base_and_records_explicit_node() {
     let root = unique_temp_dir();
     let (backend_remote, backend, backend_collaborator) = init_remote_repo(&root, "backend");
