@@ -1903,7 +1903,13 @@ fn latest_run_path(active: &ActiveBundle) -> Result<Option<PathBuf>> {
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
         .collect::<Vec<_>>();
     paths.sort();
-    Ok(paths.pop())
+    for path in paths.into_iter().rev() {
+        let run: LandRun = read_json(&path)?;
+        if run.bundle_id == active.bundle.id {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_user_path(path: &Path) -> PathBuf {
@@ -2040,5 +2046,50 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("waiting"));
+    }
+
+    #[test]
+    fn latest_run_path_ignores_other_bundles() {
+        let root = std::env::temp_dir().join(format!(
+            "knit-land-run-test-{}-{}",
+            std::process::id(),
+            safe_timestamp()
+        ));
+        let run_dir = root.join(".knit/land-runs");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let active = ActiveBundle::unlocked(
+            root.clone(),
+            root.join(".knit/bundles/target.bundle.json"),
+            crate::model::ChangeGroup::new("target".to_string(), "target".to_string(), now_iso()),
+        );
+        write_test_run(&run_dir.join("001.run.json"), "other");
+        write_test_run(&run_dir.join("002.run.json"), "target");
+        write_test_run(&run_dir.join("003.run.json"), "other");
+
+        let path = latest_run_path(&active).unwrap().unwrap();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("002.run.json")
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_test_run(path: &Path, bundle_id: &str) {
+        let run = LandRun {
+            schema_version: SCHEMA_VERSION.to_string(),
+            kind: LAND_RUN_KIND.to_string(),
+            id: format!("run-{bundle_id}"),
+            plan_id: "plan".to_string(),
+            bundle_id: bundle_id.to_string(),
+            provider: github::PROVIDER.to_string(),
+            plan_path: "plan.json".to_string(),
+            status: STATUS_SUCCEEDED.to_string(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            steps: Vec::new(),
+        };
+        let text = serde_json::to_string_pretty(&run).unwrap();
+        std::fs::write(path, format!("{text}\n")).unwrap();
     }
 }
