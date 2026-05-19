@@ -26,6 +26,8 @@ fn init_can_generate_agents_tutorial() {
     assert!(agents.contains("knit --bundle feature-a commit"));
     assert!(agents.contains("knit --bundle feature-a commit --stage"));
     assert!(agents.contains("knit --bundle feature-a push --set-upstream"));
+    assert!(agents.contains("Project JSON can define a default `landing` template"));
+    assert!(agents.contains(".knit/land-plans/<bundle>.land.json"));
     assert!(agents.contains("gloss prepare"));
 
     fs::remove_file(workspace.join("AGENTS.md")).unwrap();
@@ -170,6 +172,50 @@ fn project_agents_are_generated_from_project_json() {
     );
     assert!(updated.contains("- `backend`"));
     assert!(updated.contains("- `frontend`"));
+
+    let project_path = workspace.join(".knit/projects/arbient.project.json");
+    let mut project: Value =
+        serde_json::from_str(&fs::read_to_string(&project_path).unwrap()).unwrap();
+    project["landing"] = json!({
+        "provider": "github",
+        "merge": {
+            "repoOrder": ["backend", "frontend"],
+            "method": "squash",
+            "requiredChecksOnly": true
+        },
+        "deployments": [
+            {
+                "id": "deploy-backend",
+                "repoId": "backend",
+                "checkout": { "branch": "main", "remote": "origin", "update": "pull" },
+                "command": ["fly", "deploy"]
+            },
+            {
+                "id": "deploy-frontend",
+                "repoId": "frontend",
+                "mode": "push"
+            }
+        ]
+    });
+    fs::write(
+        &project_path,
+        format!("{}\n", serde_json::to_string_pretty(&project).unwrap()),
+    )
+    .unwrap();
+
+    knit(&workspace, ["project", "agents", "arbient"]);
+    let landing_agents = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+    assert!(landing_agents.contains("This project defines a default landing template"));
+    assert!(landing_agents
+        .contains("`knit land` expands it into `.knit/land-plans/<bundle>.land.json`"));
+    assert!(landing_agents.contains("- `backend`"));
+    assert!(landing_agents.contains("- `frontend`"));
+    assert!(
+        landing_agents.contains("Merge defaults: method `squash`, required checks only `true`.")
+    );
+    assert!(landing_agents.contains("`deploy-backend` repo `backend` uses `command` from `origin/main` with `pull`: `fly deploy`"));
+    assert!(landing_agents.contains("`deploy-frontend` repo `frontend` uses `push`"));
+    assert!(landing_agents.contains("Do not use `gh pr merge` for Knit-owned bundles."));
 
     fs::remove_dir_all(root).unwrap();
 }
