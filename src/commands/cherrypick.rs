@@ -79,6 +79,7 @@ pub fn split_bundle(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{} split", source.title));
     let bundle_id = slugify(&title);
+    preflight_split_destination(&root, &source, &repo_ids)?;
 
     crate::commands::init::start_bundle(
         &title,
@@ -92,6 +93,42 @@ pub fn split_bundle(
     )?;
     set_bundle_override(Some(bundle_id));
     cherrypick_from_bundle(source_bundle_id, targets, &repo_ids, false)
+}
+
+fn preflight_split_destination(
+    root: &Path,
+    source: &ChangeGroup,
+    repo_ids: &[String],
+) -> Result<()> {
+    let Some(project_id) = source.project_id.as_deref() else {
+        bail!(
+            "Source bundle {} is not associated with a project. Start a destination bundle with the needed repos, then run `knit cherrypick --from {}`.",
+            out::repo(&source.id),
+            source.id
+        );
+    };
+
+    let project = crate::commands::project::load_project_by_id(root, project_id)?;
+    let project_repo_ids = project
+        .repos
+        .iter()
+        .map(|repo| repo.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing = repo_ids
+        .iter()
+        .filter(|repo_id| !project_repo_ids.contains(repo_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "Project {} is missing repo(s) needed for this split: {}. Add them to the project or start a destination bundle manually and run `knit cherrypick --from {}`.",
+            out::repo(project_id),
+            missing.join(", "),
+            source.id
+        );
+    }
+
+    Ok(())
 }
 
 fn load_source_bundle(root: &Path, source_bundle_id: &str) -> Result<ChangeGroup> {

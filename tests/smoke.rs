@@ -177,6 +177,64 @@ fn bundle_split_cherrypicks_source_commits_into_a_new_bundle() {
 }
 
 #[test]
+fn bundle_split_preflights_project_repos_before_creating_bundle() {
+    let root = unique_temp_dir();
+    let backend = root.join("backend");
+    let frontend = root.join("frontend");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    init_repo(&backend, "backend");
+    init_repo(&frontend, "frontend");
+    knit(&workspace, ["project", "init", "arbient"]);
+    knit(
+        &workspace,
+        ["project", "add", "backend", backend.to_str().unwrap()],
+    );
+
+    knit(
+        &workspace,
+        ["bundle", "start", "source feature", "--repo", "backend"],
+    );
+    knit(
+        &workspace,
+        [
+            "--bundle",
+            "source-feature",
+            "track",
+            frontend.to_str().unwrap(),
+        ],
+    );
+    let frontend_checkout = workspace.join(".knit/worktrees/source-feature/frontend");
+    append_line(&frontend_checkout.join("app.txt"), "frontend source change");
+    git(&frontend_checkout, ["add", "app.txt"]);
+    git(
+        &frontend_checkout,
+        ["commit", "-m", "Frontend source change"],
+    );
+    let frontend_sha = git(&frontend_checkout, ["rev-parse", "HEAD"]);
+    knit(&workspace, ["--bundle", "source-feature", "sync"]);
+
+    let split = knit_fails(
+        &workspace,
+        [
+            "bundle",
+            "split",
+            "source-feature",
+            "--title",
+            "bad split",
+            frontend_sha.trim(),
+        ],
+    );
+    assert!(split.contains("Project arbient is missing repo(s) needed for this split: frontend"));
+    assert!(!workspace
+        .join(".knit/bundles/bad-split.bundle.json")
+        .exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn project_agents_are_generated_from_project_json() {
     let root = unique_temp_dir();
     let backend = root.join("backend");
