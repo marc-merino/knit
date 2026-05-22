@@ -119,6 +119,64 @@ fn project_default_repos_start_bundle_without_track() {
 }
 
 #[test]
+fn bundle_split_cherrypicks_source_commits_into_a_new_bundle() {
+    let root = unique_temp_dir();
+    let backend = root.join("backend");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    init_repo(&backend, "backend");
+    knit(&workspace, ["project", "init", "arbient"]);
+    knit(
+        &workspace,
+        ["project", "add", "backend", backend.to_str().unwrap()],
+    );
+
+    knit(
+        &workspace,
+        ["bundle", "start", "source feature", "--repo", "backend"],
+    );
+    let source_checkout = workspace.join(".knit/worktrees/source-feature/backend");
+    append_line(&source_checkout.join("app.txt"), "source change");
+    git(&source_checkout, ["add", "app.txt"]);
+    git(&source_checkout, ["commit", "-m", "Source change"]);
+    let source_sha = git(&source_checkout, ["rev-parse", "HEAD"]);
+    knit(&workspace, ["--bundle", "source-feature", "sync"]);
+
+    let split = knit(
+        &workspace,
+        [
+            "bundle",
+            "split",
+            "source-feature",
+            "--title",
+            "picked feature",
+            source_sha.trim(),
+        ],
+    );
+    assert!(split.contains("picking"));
+
+    let picked_checkout = workspace.join(".knit/worktrees/picked-feature/backend");
+    assert!(fs::read_to_string(picked_checkout.join("app.txt"))
+        .unwrap()
+        .contains("source change"));
+    assert!(git(&picked_checkout, ["log", "-1", "--pretty=%B"]).contains("Source change"));
+
+    let picked_bundle: Value = serde_json::from_str(
+        &fs::read_to_string(workspace.join(".knit/bundles/picked-feature.bundle.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(picked_bundle["repos"][0]["id"].as_str(), Some("backend"));
+    assert!(picked_bundle["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|node| node["type"].as_str() == Some("git.observed")));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn project_agents_are_generated_from_project_json() {
     let root = unique_temp_dir();
     let backend = root.join("backend");
