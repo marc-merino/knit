@@ -778,7 +778,7 @@ pub enum WorkItemCommand {
         depends_on: Vec<String>,
         #[arg(long = "repo", value_name = "REPO")]
         repo_hints: Vec<String>,
-        #[arg(long = "bundle", value_name = "BUNDLE")]
+        #[arg(long = "bundle-id", value_name = "BUNDLE")]
         bundle_ids: Vec<String>,
     },
     /// Mark a plotted work item approved for execution.
